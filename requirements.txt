@@ -1,0 +1,6 @@
+Flask
+pandas
+numpy
+flask_cors
+werkzeug
+Werkzeug
