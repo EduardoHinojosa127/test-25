@@ -8,10 +8,20 @@ CORS(app, origins='*')
 
 # Simulando el DataFrame con datos de películas
 # Puedes reemplazar esto con tu propia lógica para obtener el DataFrame real
-data_parte_otra_instancia = pd.read_csv('ratings.csv', nrows=25000000)
+data_parte_otra_instancia = pd.read_csv('ratings.csv', nrows=5000000)
 
 # Asignar IDs automáticamente a las películas del JSON
 pelicula_ids = {f"pelicula{i}": id for i, id in zip(range(1, 6), [296, 778, 912, 1089, 1200])}
+
+# Crear objetos para cada usuario del DataFrame
+usuarios = []
+
+for user_id, group in data_parte_otra_instancia.groupby('userId'):
+    calificaciones = {row['movieId']: row['rating'] for _, row in group.iterrows()}
+    usuarios.append({'userId': user_id, 'calificaciones': calificaciones})
+
+# Crear un diccionario para acceder a los usuarios por su ID
+usuarios_dict = {usuario['userId']: usuario for usuario in usuarios}
 
 @app.route('/procesar', methods=['POST'])
 def procesar():
@@ -26,39 +36,47 @@ def procesar():
         df_usuario = pd.DataFrame.from_dict(user_ratings, orient='index').reset_index()
         df_usuario.columns = ['pelicula', 'movieId', 'rating']
 
-        # Filtrar películas del vecino más cercano con los movieId específicos
-        peliculas_vecino_mas_cercano = data_parte_otra_instancia[
-            (data_parte_otra_instancia['movieId'].isin(pelicula_ids.values())) &
-            (data_parte_otra_instancia['userId'] != 1)  # Excluir el usuario actual
-        ]
+        # Calcular la distancia euclidiana entre el usuario recibido y cada usuario en el conjunto de datos
+        distancias = []
 
-        # Filtrar películas del usuario con los movieId específicos
-        peliculas_usuario = df_usuario[df_usuario['movieId'].isin(pelicula_ids.values())]
+        for usuario in usuarios:
+            # Obtener las calificaciones del usuario actual
+            calificaciones_usuario = [usuario['calificaciones'].get(movie_id, 0) for movie_id in df_usuario['movieId']]
+            
+            # Calcular la distancia euclidiana
+            distancia = np.linalg.norm(
+                df_usuario['rating'].values - np.array(calificaciones_usuario)
+            )
+            distancias.append({'userId': usuario['userId'], 'distancia': distancia})
 
-        # Calcular la distancia euclidiana entre el usuario enviado y el vecino más cercano
-        distancias = np.linalg.norm(
-            peliculas_vecino_mas_cercano[['rating']].values.reshape(1, -1) -
-            peliculas_usuario[['rating']].values.reshape(-1, 1), axis=0
-        )
+        # Encontrar el usuario más cercano
+        usuario_mas_cercano = min(distancias, key=lambda x: x['distancia'])
+        app.logger.info(f'Usuario más cercano: {usuario_mas_cercano}')
 
-        # Encontrar el índice de la distancia euclidiana más baja
-        vecino_mas_cercano_index = np.argmin(distancias)
+        # Obtener las calificaciones del usuario más cercano
+        calificaciones_usuario_mas_cercano = usuarios_dict[usuario_mas_cercano['userId']]['calificaciones']
 
-        vecino_mas_cercano_otra_instancia = peliculas_vecino_mas_cercano.iloc[vecino_mas_cercano_index].to_dict()
+        # Imprimir las calificaciones del usuario más cercano para las películas específicas
+        app.logger.info('Calificaciones del usuario más cercano para las películas específicas:')
+        app.logger.info(calificaciones_usuario_mas_cercano)
 
-        # Imprimir las películas del vecino más cercano
-        app.logger.info('Películas del vecino más cercano:')
-        app.logger.info(peliculas_vecino_mas_cercano[peliculas_vecino_mas_cercano['movieId'].isin(pelicula_ids.values())])
+        # Filtrar las películas recomendadas (con rating 5) y que no estén en la lista prohibida
+        recomendaciones = {movie_id: rating for movie_id, rating in calificaciones_usuario_mas_cercano.items() if rating == 5 and movie_id not in [296, 778, 912, 1089, 1200]}
 
-        # Incluir la distancia en la respuesta
-        distancia_del_vecino_mas_cercano = distancias[vecino_mas_cercano_index]
+        # Obtener las primeras 10 películas recomendadas
+        recomendaciones = dict(sorted(recomendaciones.items(), key=lambda item: item[1], reverse=True)[:10])
 
-        # Preparar la respuesta
+        # Imprimir las calificaciones del usuario más cercano para las películas específicas
+        app.logger.info('Calificaciones del usuario más cercano para las películas específicas:')
+        app.logger.info(recomendaciones)
+
         respuesta = {
-            'vecino_mas_cercano': vecino_mas_cercano_otra_instancia,
-            'distancia_del_vecino_mas_cercano': distancia_del_vecino_mas_cercano,
-            'usuario_recibido': user_data['usuario'],
+            "vecino": usuario_mas_cercano,
+            "peliculas": recomendaciones,
+            "usuario": user_data['usuario'],
         }
+
+        # Resto del código...
 
         return jsonify(respuesta)
 
